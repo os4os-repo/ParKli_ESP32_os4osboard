@@ -4,7 +4,12 @@
 
 Overview
 --------
-This repository contains the firmware, payload decoder and minimal documentation for the ParKli ESP32 water-quality sensor platform. The device measures battery level, conductivity (TDS), pH, up to five DS18B20 temperatures, an optional analog sensor, and a BME280 (air temperature, pressure, humidity). Data is sent via LoRa (TTN/OTAA).
+This repository contains the firmware, payload decoder and minimal documentation for the ParKli os4os ESP32 board, the sensor is used for water-quality water quality measurements. The device measures battery level, conductivity (TDS), pH, up to five DS18B20 temperatures, an optional analog sensor, and a BME280 (air temperature, pressure, humidity). Data is sent via LoRa (TTN/OTAA).
+
+Further information
+-----------------
+https://datahub.openscience.eu/dataset/parkli-boje <br>
+https://parkli.de/
 
 Repository layout
 -----------------
@@ -49,7 +54,12 @@ Notes & troubleshooting
 
 License and credits
 -------------------
-Add your license and credits here.
+Copyright 2025 os4os
+This project is licensed under the MIT License — see the included LICENSE file for details.
+
+Contact
+-------
+Use repository issues for questions or debugging.
 
 Contact
 -------
