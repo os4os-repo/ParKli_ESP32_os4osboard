@@ -34,7 +34,7 @@ Adafruit_BME280 bme;
 #define loraTdsEnPin 27
 #define tdsPin 39
 
-
+static uint32_t cycleStartMs = 0;
 OneWire oneWire(tempPin);
 DallasTemperature sensors(&oneWire);
 
@@ -51,8 +51,6 @@ int16_t batterylvl;
 bool debug = false;
 #define WDT_TIMEOUT 120 //Watchdog timeout in seconds
 esp_err_t ESP32_ERROR;
-// Soft watchdog for "TX cycle took too long"
-static uint32_t cycleStartMs = 0;
 //
 // For normal use, we require that you edit the sketch to replace FILLMEIN
 // with values assigned by the TTN console. However, for regression tests,
@@ -206,7 +204,7 @@ void onEvent(ev_t ev) {
       Serial.println("This will never be displayed");
       }
       //if sleep time is below 60 sec schedule TX_Intervall without resetting LORA session to minimize data usage.
-      //esp_task_wdt_reset();  // Reset the watchdog timer to prevent it from triggering (wdt must be > TX_INTERVAL) 
+      esp_task_wdt_reset();  // Reset the watchdog timer to prevent it from triggering (wdt must be > TX_INTERVAL) 
       os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(TX_INTERVAL), do_send);
       break;
     case EV_LOST_TSYNC:
@@ -343,8 +341,9 @@ void refreshSensorData() {
   Serial.println("*C");
 
   Serial.print("Pressure = ");
-  int16_t pressure = int16_t(bme.readPressure());
-  Serial.print(pressure / 100.0F);
+  int16_t pressure = (int16_t)(bme.readPressure() / 100.0); //Changing the value size so it fits into int16_t 
+  Serial.println(pressure);
+  Serial.println(bme.readPressure() / 100);
   Serial.println("hPa");
 
   Serial.print("Humidity = ");
@@ -426,12 +425,12 @@ void setup() {
   // Serielle Verbindung initialisieren
   Serial.begin(115200);
   Serial.println(F("Starting"));
-/*
+
   Serial.println("Configuring WDT...");
   Serial.print("Watchdog Timeout (in seconds) set to : ");
   Serial.println(WDT_TIMEOUT);
   esp_task_wdt_deinit();
-   Task Watchdog configuration
+  // Task Watchdog configuration
   esp_task_wdt_config_t wdt_config = {
     .timeout_ms = WDT_TIMEOUT * 1000,                 // Convertin ms
     .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,  // Bitmask of all cores, https://github.com/espressif/esp-idf/blob/v5.2.2/examples/system/task_watchdog/main/task_watchdog_example_main.c
@@ -441,7 +440,7 @@ void setup() {
   ESP32_ERROR = esp_task_wdt_init(&wdt_config);
   Serial.println("Last Reset : " + String(esp_err_to_name(ESP32_ERROR)));
   esp_task_wdt_add(NULL);  //add current thread to WDT watch
-*/
+
   // Pin-Modi festlegen und initiale Zustände setzen
   pinMode(loraTdsEnPin, OUTPUT);
   digitalWrite(loraTdsEnPin, LOW);
@@ -476,7 +475,7 @@ void setup() {
     // Batterielevel auslesen
    
     getCellLvlPercent();
-    if (CellLvlPercent < 15) {
+    if (CellLvlPercent < 20) {
       TIME_TO_SLEEP = 24 * 3600ULL;  //(24H)
       esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
       Serial.println("ESP32 wake-up in " + String(TIME_TO_SLEEP) + " seconds");
@@ -516,25 +515,29 @@ void setSleepTime() {
 
   TIME_TO_SLEEP = 24 * 3600ULL;
 
-  if (CellLvlPercent > 90) {
+  if (CellLvlPercent > 98) {
     TIME_TO_SLEEP = 1ULL;                   // Disabled ESP32 deep sleep 
     TX_INTERVAL = 60ULL;                    // Use os_setTimedCallback
   } else if (CellLvlPercent > 85) {         
-    TIME_TO_SLEEP = 1200ULL;  // 20 Minute   // Use ESP32 deep sleep 
+    TIME_TO_SLEEP = 600ULL;  // 10 Minute   // Use ESP32 deep sleep 
     TX_INTERVAL = 1ULL;                     // Disabled os_setTimedCallback
   } else if (CellLvlPercent > 40) {
     TIME_TO_SLEEP = 3600ULL;  // 1 Stunde
     TX_INTERVAL = 1ULL;
   } else if (CellLvlPercent > 20) {
-    TIME_TO_SLEEP = 24 * 3600ULL;  // 2 Stunden
+    TIME_TO_SLEEP = 2 * 3600ULL;  // 2 Stunden
     TX_INTERVAL = 1ULL;
   }
   // Ausgabe der Sleep-Time
-  Serial.println("ESP32 wake-up in " + String(TIME_TO_SLEEP) + " seconds");
+  Serial.print("TIME_TO_SLEEP: ");
+  Serial.println(TIME_TO_SLEEP);
   if (debug) {
     TIME_TO_SLEEP = 6ULL;
     Serial.print("Debug=true; overwrite TIME_TO_SLEEP: ");
-  }  
+    Serial.println(TIME_TO_SLEEP);
+  }
+  
+  
 }
 
 void getCellLvlPercent() {
@@ -607,10 +610,8 @@ static inline void checkTxIntervalWatchdog(const char* where) {
   if (cycleStartMs && (now - cycleStartMs) > ((TIME_TO_SLEEP * TX_INTERVAL) * uS_TO_S_FACTOR)) {
     Serial.print("SW-WDT "); Serial.print(where);
     Serial.print(" elapsed(ms)="); Serial.print(now - cycleStartMs);
-    Serial.print(" > TX_INTERVAL(ms)="); Serial.println((TIME_TO_SLEEP * TX_INTERVAL) * uS_TO_S_FACTOR);    
-    Serial.println("Rebooting: TX cycle exceeded TIME_TO_SLEEP * TX_INTERVAL");
-    delay(100);
-    esp_restart();
+    Serial.print(" > TX_INTERVAL(ms)="); Serial.println(TIME_TO_SLEEP * TX_INTERVAL * uS_TO_S_FACTOR);
+    rebootNow("Rebooting: TX cycle exceeded TIME_TO_SLEEP * TX_INTERVAL");
   }
 }
 
@@ -634,69 +635,8 @@ static inline void enforceBackoffLimit(uint32_t msUntil, const char* where) {
   }
 }
 
-
-
-
-
-
-
-/*######################################
-//TTN Payload formatter
-//######################################
-
-function decodeUplink(input) {
-  
-  var bytes = input.bytes;
-  var decoded = {
-    BatterieRAW: (bytes[0] << 8) + bytes[1],
-    BatterieProzent: ((bytes[28] << 8) + bytes[29]),
-    Leitwert: decodeSigned16Bit(bytes[2], bytes[3]),
-    PH: decodeSigned16Bit(bytes[4], bytes[5]),
-    Optional_Sensor: decodeSigned16Bit(bytes[6], bytes[7]),
-    Temperatur_1: moveComma(decodeSigned16Bit(bytes[8], bytes[9])),  // 16-bit signed
-    Temperatur_2: moveComma(decodeSigned16Bit(bytes[10], bytes[11])), // 16-bit signed
-    Temperatur_3: moveComma(decodeSigned16Bit(bytes[12], bytes[13])), // 16-bit signed
-    Temperatur_4: moveComma(decodeSigned16Bit(bytes[14], bytes[15])), // 16-bit signed
-    Temperatur_5: moveComma(decodeSigned16Bit(bytes[16], bytes[17])), // 16-bit signed
-    Air_Temperature: moveComma(decodeSigned16Bit(bytes[18], bytes[19])), // 16-bit signed
-    Pressure: moveComma(decodeSigned16Bit(bytes[20], bytes[21])), // 16-bit signed
-    Humidity: moveComma(decodeSigned16Bit(bytes[22], bytes[23])), // 16-bit signed
-    Aufruf: (bytes[27] | (bytes[26] << 8) | (bytes[25] << 16) | (bytes[24] << 24)) >>> 0 // 32-bit unsigned
-  };
-  
-  return {
-    data: decoded,
-    warnings: [],
-    errors: []
-  };
+static inline void rebootNow(const char* reason) {
+  Serial.println(reason);
+  delay(100);
+  esp_restart();
 }
-
-// Funktion zum Decodieren von 16-Bit vorzeichenbehafteten Werten (z.B. für Temperaturen)
-function decodeSigned16Bit(byte1, byte2) {
-  var value = (byte1 << 8) | byte2;
-  if (value >= 0x8000) {
-    value -= 0x10000;
-  }
-  return value;
-}
-
-function moveComma(input) {
-  return input / 100; // Angenommen, Temperatur wird in Hundertstel-Graden gesendet
-}
-
-function ph(input) {
-  return input;
-}
-
-
-
-//############################
-//If the temperature is -127, no temperature sensor is connected to the corresponding port
-
-
-
-
-###########################################################################
-
-
-*/
