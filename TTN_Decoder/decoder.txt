@@ -17,7 +17,7 @@ function decodeUplink(input) {
     Temperatur_4: moveComma(decodeSigned16Bit(bytes[14], bytes[15])), // 16-bit signed
     Temperatur_5: moveComma(decodeSigned16Bit(bytes[16], bytes[17])), // 16-bit signed
     Air_Temperature: moveComma(decodeSigned16Bit(bytes[18], bytes[19])), // 16-bit signed
-    Pressure: moveComma(decodeSigned16Bit(bytes[20], bytes[21])), // 16-bit signed
+    Pressure: decodeSigned16Bit(bytes[20], bytes[21]), // 16-bit signed
     Humidity: moveComma(decodeSigned16Bit(bytes[22], bytes[23])), // 16-bit signed
     Aufruf: (bytes[27] | (bytes[26] << 8) | (bytes[25] << 16) | (bytes[24] << 24)) >>> 0 // 32-bit unsigned
   };
@@ -51,10 +51,3 @@ function ph(input) {
 //############################
 //If the temperature is -127, no temperature sensor is connected to the corresponding port
 
-
-
-
-###########################################################################
-
-
-*/
