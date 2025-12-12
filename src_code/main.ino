@@ -1,3 +1,25 @@
+/**
+ * ParKli os4os ESP32 LoRaWAN firmware (main.ino)
+ * ---------------------------------------------
+ * Hardware:
+ *  - ESP32 (generic, with Arduino core)
+ *  - LoRa module (SX1276/1278/RFM95 or similar) connected over SPI
+ *  - DS18B20 temperature sensors via OneWire (up to 5 sensors)
+ *  - BME280 (I2C) for air temperature, pressure, humidity
+ *  - Analog sensors: TDS (conductivity), pH, optional analog input
+ *
+ * Notes:
+ *  - OTAA credentials (APPEUI/DEVEUI/APPKEY) must be supplied in the code. The APPKEY should be
+ *    big-endian, and APPEUI/DEVEUI are expected to be little-endian in this sketch (LMIC convention).
+ *  - The `lmic_pinmap` below maps LoRa module pins to the ESP32 pins. Keep these values consistent
+ *    with your hardware wiring (NSS/CS, RST, DIO0/DIO1 etc.).
+ *  - Watchdog and deep sleep logic are used to ensure safety and low power operation. See `setSleepTime`.
+ *
+ * Build / Flash:
+ *  - Use the Arduino IDE or PlatformIO with ESP32 core and libraries: LMIC, DallasTemperature, OneWire,
+ *    Adafruit_Sensor, Adafruit_BME280.
+ *  - Replace FILLMEIN placeholders with actual OTAA keys; see README for more details.
+ */
 #include <Arduino.h>
 #include <EEPROM.h>  //https://github.com/espressif/arduino-esp32/tree/master/libraries/EEPROM
 #include <lmic.h>
@@ -16,30 +38,25 @@ Adafruit_BME280 bme;
 #define loraRST 26
 #define loraDOI0 4
 #define loraDOI1 17
-
 #define SCL_PIN 22
 #define SDA_PIN 21
-
 #define ledPin 13
 #define userButtonPin 35
 #define vBatPin 34
-
 #define humTempOptEnPin 32
 #define tempPin 14
 #define optSensorPin 33
-
 #define phEnPin 25
 #define phPin 36
-
 #define loraTdsEnPin 27
 #define tdsPin 39
 
+// Millis timestamp tracking the start of a TX cycle. Used by watchdog.
 static uint32_t cycleStartMs = 0;
 OneWire oneWire(tempPin);
 DallasTemperature sensors(&oneWire);
 
 //Define interval for measurements, set by function setSleepTime() or absolut
-
 #define uS_TO_S_FACTOR 1000000ULL /* Conversion factor for micro seconds to seconds */
 uint64_t TIME_TO_SLEEP = 10ULL;   /* Time ESP32 will go to sleep (in seconds) Will be overwritten by setSleepTime() funktion*/
 int16_t CellLvlPercent;
@@ -47,16 +64,15 @@ byte buffer[30];
 #define EEPROM_SIZE 24
 uint32_t bootCount;
 int16_t batterylvl;
+
 //if true sensor values are send every 6 sec
 bool debug = false;
 #define WDT_TIMEOUT 120 //Watchdog timeout in seconds
 esp_err_t ESP32_ERROR;
+
 //
-// For normal use, we require that you edit the sketch to replace FILLMEIN
-// with values assigned by the TTN console. However, for regression tests,
-// we want to be able to compile these scripts. The regression tests define
-// COMPILE_REGRESSION_TEST, and in that case we define FILLMEIN to a non-
-// working but innocuous value.
+// For normal use, you must edit the sketch and replace FILLMEIN 
+// with values from your LORA network server, e.g., the TTN console.
 //
 #ifdef COMPILE_REGRESSION_TEST
 #define FILLMEIN 0
@@ -68,10 +84,9 @@ esp_err_t ESP32_ERROR;
 void do_send(osjob_t* j);
 
 // This EUI must be in little-endian format, so least-significant-byte
-// first. When copying an EUI from ttnctl output, this means to reverse
-// the bytes. For TTN issued EUIs the last bytes should be 0xD5, 0xB3,
-// 0x70.
-static const u1_t PROGMEM APPEUI[8] = { FILLMEIN };
+// first. When copying an EUI from TTN console output, this means to reverse
+// the bytes.
+static const u1_t PROGMEM APPEUI[8] = { FILLMEIN }; //(lsb)
 
 void os_getArtEui(u1_t* buf) {
   memcpy_P(buf, APPEUI, 8);
@@ -84,9 +99,7 @@ void os_getDevEui(u1_t* buf) {
   memcpy_P(buf, DEVEUI, 8);
 }
 
-// This key should be in big endian format (or, since it is not really a
-// number but a block of memory, endianness does not really apply). In
-// practice, a key taken from ttnctl can be copied as-is. 
+// This key should be in big endian format. 
 static const u1_t PROGMEM APPKEY[16] = { FILLMEIN }; //(msb)
 
 void os_getDevKey(u1_t* buf) {
@@ -96,15 +109,19 @@ void os_getDevKey(u1_t* buf) {
 static uint8_t mydata[] = "Hello, world!";
 static osjob_t sendjob;
 
-// Schedule TX every this many seconds (might become longer due to duty
-// cycle limitations).
+// Schedule TX every this many seconds 
+// (might become longer due to duty cycle limitations).
 unsigned TX_INTERVAL = 1;
 
+// The block configures LMIC to know which microcontroller pins are wired to 
+// the LoRa module (chip select, reset, and DIOs). 
+// If the numbers don’t match the physical wiring, 
+// the radio won’t operate correctly with the LMIC stack.
 const lmic_pinmap lmic_pins = {
-  .nss = 5,  // chip select on (rf95module) CS
+  .nss = loraNSS,
   .rxtx = LMIC_UNUSED_PIN,
-  .rst = 26,                          // reset pin
-  .dio = { 4, 17, LMIC_UNUSED_PIN },  //G0, G1
+  .rst = loraRST,
+  .dio = { loraDOI0, loraDOI1, LMIC_UNUSED_PIN },
 };
 
 void printHex2(unsigned v) {
@@ -114,6 +131,12 @@ void printHex2(unsigned v) {
   Serial.print(v, HEX);
 }
 
+/**
+ * onEvent
+ * -------
+ * LMIC event callback. Handles OTAA join, TX complete events and logging.
+ * Events include EV_JOINED, EV_TXCOMPLETE, EV_RXCOMPLETE, EV_JOIN_FAILED, and more.
+ */
 void onEvent(ev_t ev) {
   Serial.print(os_getTime());
   Serial.print(": ");
@@ -165,14 +188,7 @@ void onEvent(ev_t ev) {
       // size, we don't use it in this example.
       LMIC_setLinkCheckMode(0);
       break;
-    /*
-        || This event is defined but not used in the code. No
-        || point in wasting codespace on it.
-        ||
-        || case EV_RFU1:
-        ||     Serial.println(F("EV_RFU1"));
-        ||     break;
-        */
+
     case EV_JOIN_FAILED:
       Serial.println(F("EV_JOIN_FAILED"));
       break;
@@ -193,7 +209,7 @@ void onEvent(ev_t ev) {
       esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
       Serial.println("ESP32 wake-up in " + String(TIME_TO_SLEEP) + " seconds");
       
-      //Only enter Deep Sleep mode if esp goes to sleep more than 60sec 
+      // Only enter Deep Sleep mode if esp goes to sleep more than 60sec 
       if(TX_INTERVAL == 1){
       // Go in Deep Sleep mode
       Serial.println("Goes into Deep Sleep mode");
@@ -203,7 +219,8 @@ void onEvent(ev_t ev) {
       esp_deep_sleep_start();
       Serial.println("This will never be displayed");
       }
-      //if sleep time is below 60 sec schedule TX_Intervall without resetting LORA session to minimize data usage.
+      // If sleep time is below 60 sec schedule TX_Intervall without resetting LORA session 
+      // to minimize data usage.
       esp_task_wdt_reset();  // Reset the watchdog timer to prevent it from triggering (wdt must be > TX_INTERVAL) 
       os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(TX_INTERVAL), do_send);
       break;
@@ -223,14 +240,7 @@ void onEvent(ev_t ev) {
     case EV_LINK_ALIVE:
       Serial.println(F("EV_LINK_ALIVE"));
       break;
-    /*
-        || This event is defined but not used in the code. No
-        || point in wasting codespace on it.
-        ||
-        || case EV_SCAN_FOUND:
-        ||    Serial.println(F("EV_SCAN_FOUND"));
-        ||    break;
-        */
+
     case EV_TXSTART:
       Serial.println(F("EV_TXSTART"));
       break;
@@ -300,6 +310,13 @@ void do_send(osjob_t* j) {
   // Next TX is scheduled after TX_COMPLETE event.
 }
 
+/**
+ * refreshSensorData
+ * ------------------
+ * Read all connected sensors (OneWire DS18B20s, BME280, analog sensors),
+ * build the LoRa payload and store it in `buffer`.
+ * Also updates `bootCount` and `CellLvlPercent`.
+ */
 void refreshSensorData() {
 
   getBootCycle();
@@ -332,7 +349,7 @@ void refreshSensorData() {
 
   if (!bme.begin(0x76)) {
     if (!bme.begin(0x77)) {
-      Serial.println("BME280 nicht gefunden!");
+      Serial.println("BME280 not found!");
     }
   }
   Serial.print("AirTemperature = ");
@@ -350,15 +367,13 @@ void refreshSensorData() {
   int16_t humidity = int16_t(bme.readHumidity() * 100);
   Serial.print(humidity / 100.0F);
   Serial.println("%");
-
   Serial.println();
+  
   //digitalWrite(humTempOptEnPin, LOW);
-
   digitalWrite(humTempOptEnPin, HIGH);
   delay(100);
   int16_t optionalSensor = analogRead(optSensorPin);
   digitalWrite(humTempOptEnPin, LOW);
-
 
   Serial.print(F("|| Batterie: "));
   Serial.print(batterylvl);
@@ -422,14 +437,14 @@ void refreshSensorData() {
 }
 
 void setup() {
-  // Serielle Verbindung initialisieren
+  // Initialize serial connection
   Serial.begin(115200);
   Serial.println(F("Starting"));
-
   Serial.println("Configuring WDT...");
   Serial.print("Watchdog Timeout (in seconds) set to : ");
   Serial.println(WDT_TIMEOUT);
   esp_task_wdt_deinit();
+  
   // Task Watchdog configuration
   esp_task_wdt_config_t wdt_config = {
     .timeout_ms = WDT_TIMEOUT * 1000,                 // Convertin ms
@@ -441,7 +456,7 @@ void setup() {
   Serial.println("Last Reset : " + String(esp_err_to_name(ESP32_ERROR)));
   esp_task_wdt_add(NULL);  //add current thread to WDT watch
 
-  // Pin-Modi festlegen und initiale Zustände setzen
+  // Define pin modes and set initial states
   pinMode(loraTdsEnPin, OUTPUT);
   digitalWrite(loraTdsEnPin, LOW);
 
@@ -471,8 +486,8 @@ void setup() {
 
 
   if (!debug) {
-    //Verhindere einen deadlock des ESP32 durch zu geringen Akkustand
-    // Batterielevel auslesen
+    // Prevent a deadlock of the ESP32 due to low battery level
+    // Read battery level and go to deep sleep if below 20%
    
     getCellLvlPercent();
     if (CellLvlPercent < 20) {
@@ -494,8 +509,6 @@ void setup() {
   sensors.begin();
   digitalWrite(humTempOptEnPin, LOW);
 
-
-
   // LMIC init
   os_init();
   // Reset the MAC state. Session and pending data transfers will be discarded.
@@ -509,26 +522,31 @@ void loop() {
   os_runloop_once();
 }
 
+/**
+ * setSleepTime
+ * ------------
+ * Decide the sleep duration and TX interval based on battery level
+ * (CellLvlPercent). Sets global TIME_TO_SLEEP and TX_INTERVAL.
+ */
 void setSleepTime() {
   getCellLvlPercent();
-  // Standard Sleep Time (24 Stunden)
-
+  // Standard Sleep Time (24 hours)
   TIME_TO_SLEEP = 24 * 3600ULL;
 
   if (CellLvlPercent > 98) {
     TIME_TO_SLEEP = 1ULL;                   // Disabled ESP32 deep sleep 
     TX_INTERVAL = 60ULL;                    // Use os_setTimedCallback
   } else if (CellLvlPercent > 85) {         
-    TIME_TO_SLEEP = 600ULL;  // 10 Minute   // Use ESP32 deep sleep 
+    TIME_TO_SLEEP = 600ULL;                 // 10 minutes Use ESP32 deep sleep 
     TX_INTERVAL = 1ULL;                     // Disabled os_setTimedCallback
   } else if (CellLvlPercent > 40) {
-    TIME_TO_SLEEP = 3600ULL;  // 1 Stunde
+    TIME_TO_SLEEP = 3600ULL;                // 1 hour
     TX_INTERVAL = 1ULL;
   } else if (CellLvlPercent > 20) {
-    TIME_TO_SLEEP = 2 * 3600ULL;  // 2 Stunden
+    TIME_TO_SLEEP = 2 * 3600ULL;            // 2 hours
     TX_INTERVAL = 1ULL;
   }
-  // Ausgabe der Sleep-Time
+  // Print the sleep time
   Serial.print("TIME_TO_SLEEP: ");
   Serial.println(TIME_TO_SLEEP);
   if (debug) {
@@ -536,13 +554,19 @@ void setSleepTime() {
     Serial.print("Debug=true; overwrite TIME_TO_SLEEP: ");
     Serial.println(TIME_TO_SLEEP);
   }
-  
-  
+ 
 }
 
+/**
+ * getCellLvlPercent
+ * ------------------
+ * Calculate battery percentage by mapping the ADC voltage reading
+ * from batterylvl (raw ADC) to a range defined by min/max operating voltage.
+ */
 void getCellLvlPercent() {
   const int maxOperatingVoltage = 2400;
-  const int minOperatingVoltage = 2000;  //Vergleichsweise hoch da DeepSleep Current bei werten unter 2000 deutlich über normal 200uA
+  // Comparatively high, as DeepSleep Current is significantly above normal 200uA at values below 2000.
+  const int minOperatingVoltage = 2000;
   const float operationalRange = maxOperatingVoltage - minOperatingVoltage;
 
   if (batterylvl <= minOperatingVoltage) {
@@ -557,53 +581,62 @@ void getCellLvlPercent() {
   Serial.println(CellLvlPercent);
 }
 
+/**
+ * getBootCycle
+ * ------------
+ * Read and update the boot counter stored in EEPROM. Adds an 'init code'
+ * marker to detect whether the EEPROM values are valid.
+ */
 void getBootCycle() {
-  // Initialisierung des EEPROM
+  // Initialization of the EEPROM
   EEPROM.begin(EEPROM_SIZE);
-
-  // Adressen und Code-Initialisierung
+  // Addresses and code initialization
   const int addressBootCycle = 0;
   const int addressInitCode = 10;
   const uint32_t expectedCode = 123456789;
-
-  // Initialisierungscode lesen
+  // Read initialization code
   uint32_t storedInitCode;
   EEPROM.get(addressInitCode, storedInitCode);
 
   Serial.print("Gelesener Init-Code: ");
   Serial.println(storedInitCode);
 
-  // Überprüfen, ob der gespeicherte Init-Code übereinstimmt
+  // Check whether the stored init code matches
   if (storedInitCode != expectedCode) {
     Serial.println("Init-Code nicht gefunden, BootCycle wird auf 1 gesetzt.");
-
-    // Init-Code und Boot-Zähler zurücksetzen
+    // Reset init code and boot counter
     EEPROM.writeUInt(addressInitCode, expectedCode);
     EEPROM.writeUInt(addressBootCycle, 1);
-    EEPROM.commit();  // Commit, da Änderungen vorgenommen wurden
+    EEPROM.commit();  // Commit, as changes have been made
 
     bootCount = 1;
   } else {
-    // Boot-Zyklus erhöhen
-    Serial.println("BootCycle wird erhöht.");
+    // Increase boot cycle
+    Serial.println("BootCycle is increased.");
 
     uint32_t currentBootCycle;
     EEPROM.get(addressBootCycle, currentBootCycle);
 
-    Serial.print("Aktueller Boot-Zyklus: ");
+    Serial.print("Current boot cycle: ");
     Serial.println(currentBootCycle);
 
     uint32_t newBootCycle = currentBootCycle + 1;
     EEPROM.writeUInt(addressBootCycle, newBootCycle);
-    EEPROM.commit();  // Commit, da Änderungen vorgenommen wurden
+    EEPROM.commit();  // Commit, as changes have been made
 
     bootCount = newBootCycle;
   }
 
-  // EEPROM-Prozess beenden
+  // Terminate EEPROM process
   EEPROM.end();
 }
 
+/**
+ * checkTxIntervalWatchdog
+ * -----------------------
+ * Watchdog for the TX cycle: if the current cycle has been running
+ * longer than TIME_TO_SLEEP * TX_INTERVAL, reboot.
+ */
 static inline void checkTxIntervalWatchdog(const char* where) {
   const uint32_t now = millis();
   // Compare with subtraction to survive millis() wrap
@@ -615,6 +648,13 @@ static inline void checkTxIntervalWatchdog(const char* where) {
   }
 }
 
+/**
+ * enforceBackoffLimit
+ * --------------------
+ * If the LMIC backoff is larger than the safe limit, put device into
+ * deep sleep for 2 hours in attempt to avoid firewalled transmit cycles &
+ * conserve battery power.
+ */
 static inline void enforceBackoffLimit(uint32_t msUntil, const char* where) {
   const uint32_t limitMs = 30 * uS_TO_S_FACTOR;
   if (msUntil > limitMs) {
@@ -635,6 +675,12 @@ static inline void enforceBackoffLimit(uint32_t msUntil, const char* where) {
   }
 }
 
+/**
+ * rebootNow
+ * ---------
+ * Log a reason and restart the ESP32. Used by watchdog and alarm-handling
+ * code paths.
+ */
 static inline void rebootNow(const char* reason) {
   Serial.println(reason);
   delay(100);
