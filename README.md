@@ -16,7 +16,7 @@ Repository layout
 - [src_code/main.ino](src_code/main.ino) — Main ESP32 Arduino sketch with LMIC LoRaWAN integration; key functions: [`do_send`](src_code/main.ino), [`refreshSensorData`](src_code/main.ino), [`setSleepTime`](src_code/main.ino), [`getCellLvlPercent`](src_code/main.ino), [`getBootCycle`](src_code/main.ino), [`onEvent`](src_code/main.ino), [`checkTxIntervalWatchdog`](src_code/main.ino), [`enforceBackoffLimit`](src_code/main.ino).
 - [TTN_Decoder/decoder.txt](TTN_Decoder/decoder.txt) — TTN payload formatter / decoder used on The Things Network; exposes [`decodeUplink`](TTN_Decoder/decoder.txt), [`decodeSigned16Bit`](TTN_Decoder/decoder.txt), [`moveComma`](TTN_Decoder/decoder.txt).
 - [Documentation/test.txt](Documentation/test.txt) — placeholder/notes.
-- [Images/](Images/) — project images and GIFs used in this README.
+- [Images/](Images/) — Images of the PCB board and settings in Arduino IDE for code upload.
 
 Firmware summary
 ----------------
@@ -43,7 +43,7 @@ Build / flash
 -------------
 1. Open [src_code/main.ino](src_code/main.ino) in the Arduino IDE or PlatformIO (ESP32 board).
 2. Install required libraries: LMIC, DallasTemperature, OneWire, Adafruit_BME280, Adafruit_Sensor (and ESP32 core).
-3. Update OTAA credentials in the sketch (APPEUI / DEVEUI / APPKEY).
+3. Update OTAA credentials in the sketch (APPEUI / DEVEUI / APPKEY). The credentials can be obtained from your LORA network server, e.g., the TTN console  
 4. Compile and flash to the ESP32.
 
 Notes & troubleshooting
