@@ -42,9 +42,15 @@ Use the TTN JavaScript decoder in [TTN_Decoder/decoder.txt](TTN_Decoder/decoder.
 Build / flash
 -------------
 1. Open [src_code/main.ino](src_code/main.ino) in the Arduino IDE or PlatformIO (ESP32 board).
-2. Install required libraries: LMIC, DallasTemperature, OneWire, Adafruit_BME280, Adafruit_Sensor (and ESP32 core).
-3. Update OTAA credentials in the sketch (APPEUI / DEVEUI / APPKEY). The credentials can be obtained from your LORA network server, e.g., the TTN console  
-4. Compile and flash to the ESP32.
+2. Install required libraries: 
+   - MCCI LoRaWAN LMIC library https://github.com/mcci-catena/arduino-lmic, 
+   - DallasTemperature https://github.com/milesburton/Arduino-Temperature-Control-Library, 
+   - OneWire https://www.pjrc.com/teensy/td_libs_OneWire.html, 
+   - Adafruit BME280 https://github.com/adafruit/Adafruit_BME280_Library,  
+The board is testet with the following versions MCCI LoRaWAN LMIC library(4.1.1), DallasTemperature(3.9.0), (2.3.8), Adafruit BME280(2.2.4), Adafruit_Sensor()
+3. Install board in board managers, and choose ESP32-WROOM-DA Module https://github.com/espressif/arduino-esp32 
+4. Update OTAA credentials in the sketch (APPEUI / DEVEUI / APPKEY). The credentials can be obtained from your LORA network server, e.g., the TTN console  
+5. Compile and flash to the ESP32.
 
 Notes & troubleshooting
 -----------------------
