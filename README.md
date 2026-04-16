@@ -66,7 +66,3 @@ This project is licensed under the MIT License — see the included LICENSE file
 Contact
 -------
 Use repository issues for questions or debugging.
-
-Contact
--------
-Use repository issues for questions or debugging.
