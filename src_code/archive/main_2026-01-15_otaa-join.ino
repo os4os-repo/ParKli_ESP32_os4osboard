@@ -70,30 +70,6 @@ bool debug = false;
 #define WDT_TIMEOUT 120 //Watchdog timeout in seconds
 esp_err_t ESP32_ERROR;
 
-// --- Persisted LMIC session in RTC memory (survives deep sleep, not power loss/reset) ---
-#define LMIC_SESSION_MAGIC 0xCAFEBABE
-// Force a fresh OTAA join after this many uplinks (heals frame-counter drift,
-// refreshes session keys, lets ADR re-tune from scratch).
-// Note: TTN community network fair-use is 30s of airtime/device/day, and a
-// JoinRequest is sent at SF12 (~1.5s airtime). Keep this comfortably high.
-// The rejoin threshold is evaluated in setup() via restoreLmicSession(),
-// i.e. only after a deep-sleep wake or reset.
-#define REJOIN_AFTER_UPLINKS 150UL
-RTC_DATA_ATTR struct {
-  uint32_t  magic;
-  u4_t      netid;
-  devaddr_t devaddr;
-  u1_t      nwkKey[16];
-  u1_t      artKey[16];
-  u4_t      seqnoUp;
-  u4_t      seqnoDn;
-  uint32_t  uplinkCount;   // cycles since last successful OTAA join
-} lmicSession;
-
-// Forward declarations for the LMIC session persistence helpers (defined below)
-void saveLmicSession();
-bool restoreLmicSession();
-
 //
 // For normal use, you must edit the sketch and replace FILLMEIN 
 // with values from your LORA network server, e.g., the TTN console.
@@ -211,9 +187,6 @@ void onEvent(ev_t ev) {
       // during join, but because slow data rates change max TX
       // size, we don't use it in this example.
       LMIC_setLinkCheckMode(0);
-      lmicSession.uplinkCount = 0;   // reset on fresh join
-      saveLmicSession();
-      Serial.println(F("LMIC session saved to RTC memory"));
       break;
 
     case EV_JOIN_FAILED:
@@ -231,14 +204,6 @@ void onEvent(ev_t ev) {
         Serial.print(LMIC.dataLen);
         Serial.println(F(" bytes of payload"));
       }
-      // Count this successful uplink and persist updated frame counters
-      // before sleeping/scheduling next TX
-      lmicSession.uplinkCount++;
-      Serial.print(F("Uplink count since last join: "));
-      Serial.print(lmicSession.uplinkCount);
-      Serial.print(F(" / "));
-      Serial.println(REJOIN_AFTER_UPLINKS);
-      saveLmicSession();
       // Schedule next transmission
       setSleepTime();
       esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
@@ -549,12 +514,6 @@ void setup() {
   // Reset the MAC state. Session and pending data transfers will be discarded.
   LMIC_reset();
 
-  if (restoreLmicSession()) {
-    Serial.println(F("LMIC session restored from RTC memory — skipping OTAA join"));
-  } else {
-    Serial.println(F("No valid saved session — will perform OTAA join"));
-  }
-
   // Start job (sending automatically starts OTAA too)
   do_send(&sendjob);
 }
@@ -726,87 +685,4 @@ static inline void rebootNow(const char* reason) {
   Serial.println(reason);
   delay(100);
   esp_restart();
-}
-
-// --- LMIC session persistence (RTC memory, survives deep sleep) ---
-
-/**
- * saveLmicSession
- * ---------------
- * Snapshot the current LMIC session (netid, devaddr, keys, frame counters)
- * into RTC memory so it survives deep sleep. uplinkCount is maintained by the
- * EV_JOINED / EV_TXCOMPLETE handlers.
- */
-void saveLmicSession() {
-  lmicSession.magic = LMIC_SESSION_MAGIC;
-  LMIC_getSessionKeys(&lmicSession.netid, &lmicSession.devaddr,
-                      lmicSession.nwkKey, lmicSession.artKey);
-  lmicSession.seqnoUp = LMIC.seqnoUp;
-  lmicSession.seqnoDn = LMIC.seqnoDn;
-  Serial.print(F("Session saved. devaddr="));
-  Serial.print(lmicSession.devaddr, HEX);
-  Serial.print(F(" seqnoUp="));
-  Serial.print(lmicSession.seqnoUp);
-  Serial.print(F(" seqnoDn="));
-  Serial.println(lmicSession.seqnoDn);
-}
-
-/**
- * restoreLmicSession
- * ------------------
- * Restore a saved LMIC session from RTC memory so the device can resume
- * without a fresh OTAA join. Returns false (forcing an OTAA join) when there
- * is no valid saved session OR when REJOIN_AFTER_UPLINKS uplinks have elapsed
- * since the last join. On EU868 the channel plan must be re-applied because
- * LMIC_setSession() clears the join state.
- */
-bool restoreLmicSession() {
-  if (lmicSession.magic != LMIC_SESSION_MAGIC) {
-    return false;
-  }
-
-  // Force a periodic OTAA rejoin so frame counters, keys, and ADR get refreshed.
-  if (lmicSession.uplinkCount >= REJOIN_AFTER_UPLINKS) {
-    Serial.print(F("Rejoin threshold reached ("));
-    Serial.print(lmicSession.uplinkCount);
-    Serial.print(F(" >= "));
-    Serial.print(REJOIN_AFTER_UPLINKS);
-    Serial.println(F(") — forcing OTAA rejoin"));
-    lmicSession.magic = 0;  // invalidate; will be repopulated on EV_JOINED
-    return false;
-  }
-
-  // Restore keys + devaddr (this clears the join state internally, so we must
-  // re-apply channels and DR/TXpow afterwards on EU868).
-  LMIC_setSession(lmicSession.netid, lmicSession.devaddr,
-                  lmicSession.nwkKey, lmicSession.artKey);
-
-  // --- EU868 channel plan (3 mandatory + 5 optional CFList channels) ---
-  // Channels 0..2 are mandatory on EU868. Channels 3..7 are typically
-  // assigned by TTN via the JoinAccept CFList — re-add them so behaviour
-  // matches the original session.
-  LMIC_setupChannel(0, 868100000, DR_RANGE_MAP(DR_SF12, DR_SF7),  BAND_CENTI);
-  LMIC_setupChannel(1, 868300000, DR_RANGE_MAP(DR_SF12, DR_SF7B), BAND_CENTI);
-  LMIC_setupChannel(2, 868500000, DR_RANGE_MAP(DR_SF12, DR_SF7),  BAND_CENTI);
-  LMIC_setupChannel(3, 867100000, DR_RANGE_MAP(DR_SF12, DR_SF7),  BAND_CENTI);
-  LMIC_setupChannel(4, 867300000, DR_RANGE_MAP(DR_SF12, DR_SF7),  BAND_CENTI);
-  LMIC_setupChannel(5, 867500000, DR_RANGE_MAP(DR_SF12, DR_SF7),  BAND_CENTI);
-  LMIC_setupChannel(6, 867700000, DR_RANGE_MAP(DR_SF12, DR_SF7),  BAND_CENTI);
-  LMIC_setupChannel(7, 867900000, DR_RANGE_MAP(DR_SF12, DR_SF7),  BAND_CENTI);
-  // RX2 on EU868 is 869.525 MHz / SF9 — LMIC's default is fine, but be explicit:
-  LMIC.dn2Dr = DR_SF9;
-
-  LMIC.seqnoUp = lmicSession.seqnoUp;
-  LMIC.seqnoDn = lmicSession.seqnoDn;
-
-  LMIC_setLinkCheckMode(0);
-  LMIC_setDrTxpow(DR_SF7, 14);
-
-  Serial.print(F("Session restored. devaddr="));
-  Serial.print(lmicSession.devaddr, HEX);
-  Serial.print(F(" seqnoUp="));
-  Serial.print(lmicSession.seqnoUp);
-  Serial.print(F(" seqnoDn="));
-  Serial.println(lmicSession.seqnoDn);
-  return true;
 }
